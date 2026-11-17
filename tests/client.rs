@@ -16,6 +16,7 @@ use melipayamak::sms::{
     BasePriceRequest, Location, MessagesRequest, Outgoing, SchedulePattern,
     SendMultiple, SendOtp, SendPattern, SendSms,
 };
+use melipayamak::wire::{self, Credentials};
 use melipayamak::{
     Client, DeliveryStatus, Error, MAX_RESPONSE_BYTES, RecId, RetStatus,
 };
@@ -80,6 +81,15 @@ fn assert_json(got: &Captured, path: &str, mut want: Value) {
     want["password"] = KEY.into();
     let body: Value = serde_json::from_slice(&got.body).unwrap();
     assert_eq!(body, want);
+}
+
+/// The client sent exactly what the wire layer builds.
+fn sent_as_wire(got: &Captured, body: Result<Vec<u8>, Error>) {
+    assert_eq!(got.body, body.unwrap());
+}
+
+fn creds() -> Credentials {
+    Credentials::new(USER, KEY).unwrap()
 }
 
 fn sms(to: &[&str]) -> SendSms {
@@ -188,17 +198,16 @@ async fn send_multiple_wire() {
 
 #[tokio::test]
 async fn pattern_sends_wire() {
+    let req = SendPattern {
+        to: "09120000001".into(),
+        body_id: 123456,
+        args: vec!["Ali".into(), "4321".into()],
+    };
     let (base, server) = serve_once(200, ok(json!(REC))).await;
-    client(&base)
-        .send_pattern(&SendPattern {
-            to: "09120000001".into(),
-            body_id: 123456,
-            args: vec!["Ali".into(), "4321".into()],
-        })
-        .await
-        .unwrap();
+    client(&base).send_pattern(&req).await.unwrap();
+    let got = server.await.unwrap();
     assert_form(
-        &server.await.unwrap(),
+        &got,
         "/api/SendSMS/BaseServiceNumber",
         &[
             ("text", "Ali;4321"),
@@ -206,6 +215,7 @@ async fn pattern_sends_wire() {
             ("bodyId", "123456"),
         ],
     );
+    sent_as_wire(&got, wire::SEND_PATTERN.body(&creds(), &req));
 
     let (base, server) = serve_once(200, ok(json!(REC))).await;
     client(&base)
@@ -234,11 +244,9 @@ async fn delivery_wire() {
     let (base, server) = serve_once(200, ok(json!("1"))).await;
     let s = client(&base).delivery(RecId(42)).await.unwrap();
     assert_eq!(s, DeliveryStatus::Delivered);
-    assert_form(
-        &server.await.unwrap(),
-        "/api/SendSMS/GetDeliveries2",
-        &[("recId", "42")],
-    );
+    let got = server.await.unwrap();
+    assert_form(&got, "/api/SendSMS/GetDeliveries2", &[("recId", "42")]);
+    sent_as_wire(&got, wire::DELIVERY.body(&creds(), &RecId(42)));
 }
 
 #[tokio::test]
@@ -290,7 +298,9 @@ async fn messages_wire() {
 async fn credit_and_price_wire() {
     let (base, server) = serve_once(200, ok(json!("1234.565"))).await;
     assert_eq!(client(&base).credit().await.unwrap(), "1234.565");
-    assert_form(&server.await.unwrap(), "/api/SendSMS/GetCredit", &[]);
+    let got = server.await.unwrap();
+    assert_form(&got, "/api/SendSMS/GetCredit", &[]);
+    sent_as_wire(&got, wire::CREDIT.body(&creds(), &()));
 
     let (base, server) = serve_once(200, ok(json!("950"))).await;
     let price = client(&base)
@@ -464,11 +474,13 @@ async fn patterns_wire() {
 
     let (base, server) = serve_once(200, ok(json!("1"))).await;
     client(&base).delete_pattern(4712).await.unwrap();
+    let got = server.await.unwrap();
     assert_json(
-        &server.await.unwrap(),
+        &got,
         "/api/ShareService/DeleteBody",
         json!({"bodyId": 4712}),
     );
+    sent_as_wire(&got, wire::DELETE_PATTERN.body(&creds(), &4712));
 }
 
 /// The documented AddBody failure for a missing permission.

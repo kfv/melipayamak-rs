@@ -3,7 +3,8 @@
 
 use std::fmt;
 
-/// Errors returned by [`Client`](crate::Client).
+/// Errors returned by [`Client`](crate::Client) and by the operations in
+/// [`wire`](crate::wire).
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -23,6 +24,7 @@ pub enum Error {
     },
     /// The request never got a complete HTTP response: connection, TLS,
     /// timeout, or similar.
+    #[cfg(feature = "client")]
     Transport(reqwest::Error),
     /// The response body was not the documented JSON envelope.
     Decode {
@@ -51,6 +53,7 @@ impl fmt::Display for Error {
                 }
                 f.write_str(")")
             }
+            #[cfg(feature = "client")]
             Error::Transport(_) => f.write_str("melipayamak request failed"),
             Error::Decode { status, .. } => {
                 write!(f, "cannot decode melipayamak response (HTTP {status})")
@@ -70,6 +73,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            #[cfg(feature = "client")]
             Error::Transport(e) => Some(e),
             Error::Decode { source, .. } => Some(source),
             Error::Api(_)

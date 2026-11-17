@@ -4,8 +4,9 @@
 //! Smart sends, which retry from up to two backup numbers
 //! (`/api/SmartSMS/…`).
 
-use crate::sms::{Outgoing, indexed, recipients};
-use crate::{Client, DeliveryStatus, Error, RecId, value};
+use crate::sms::Outgoing;
+#[cfg(feature = "client")]
+use crate::{Client, DeliveryStatus, Error, RecId, wire};
 
 /// Senders for a Smart send.  Melipayamak tries `from` first, then
 /// `from_support_one`, then `from_support_two`.
@@ -39,14 +40,7 @@ pub struct SmartSendMultiple {
     pub senders: SmartSenders,
 }
 
-fn senders(s: &SmartSenders) -> [(String, String); 3] {
-    [
-        ("from".to_owned(), s.from.clone()),
-        ("fromSupportOne".to_owned(), s.from_support_one.clone()),
-        ("fromSupportTwo".to_owned(), s.from_support_two.clone()),
-    ]
-}
-
+#[cfg(feature = "client")]
 impl Client {
     /// Sends one text to one or more recipients, falling back to the
     /// backup senders.  Returns one ID per recipient.
@@ -57,13 +51,7 @@ impl Client {
         &self,
         req: &SmartSend,
     ) -> Result<Vec<RecId>, Error> {
-        let mut fields = vec![
-            ("to".to_owned(), recipients(&req.to)?),
-            ("text".to_owned(), req.text.clone()),
-        ];
-        fields.extend(senders(&req.senders));
-        let r = self.post_form("api/SmartSMS/Send", fields).await?;
-        value::rec_ids(&r)
+        self.call(&wire::SMART_SEND, req).await
     }
 
     /// Sends a different text to each recipient, falling back to the
@@ -75,18 +63,7 @@ impl Client {
         &self,
         req: &SmartSendMultiple,
     ) -> Result<Vec<RecId>, Error> {
-        if req.messages.is_empty() {
-            return Err(Error::InvalidArgument("no recipients"));
-        }
-        let mut fields =
-            indexed("to", req.messages.iter().map(|m| m.to.as_str()));
-        fields.extend(indexed(
-            "text",
-            req.messages.iter().map(|m| m.text.as_str()),
-        ));
-        fields.extend(senders(&req.senders));
-        let r = self.post_form("api/SmartSMS/SendMultiple", fields).await?;
-        value::rec_ids(&r)
+        self.call(&wire::SMART_SEND_MULTIPLE, req).await
     }
 
     /// Asks for the delivery status of Smart sends, one per ID, in order.
@@ -100,29 +77,10 @@ impl Client {
         &self,
         ids: &[RecId],
     ) -> Result<Vec<DeliveryStatus>, Error> {
-        if ids.is_empty() {
-            return Err(Error::InvalidArgument("no IDs"));
-        }
-        let ids: Vec<String> = ids.iter().map(RecId::to_string).collect();
-        let fields = indexed("Ids", ids.iter().map(String::as_str));
-        let r = self.post_form("api/SmartSMS/GetDeliveries", fields).await?;
-        let list = value::int_list(&r)?;
-        // Codes that fail the whole call, as opposed to one entry.
-        if let [n] = list[..]
-            && matches!(n, -3 | -10 | -112..=-108)
-        {
-            return Err(r.api_error());
-        }
-        if list.len() != ids.len() {
-            return Err(r.unexpected());
-        }
-        Ok(list
-            .into_iter()
-            .map(|n| match n {
-                // -1 means something else here than for delivery().
-                -1 => DeliveryStatus::Other(-1),
-                n => DeliveryStatus::from_code(n),
-            })
-            .collect())
+        let op = wire::smart_deliveries(ids)?;
+        let body = op.body(self.credentials());
+        let (status, bytes) =
+            self.post(op.path(), op.content_type(), body).await?;
+        op.decode(status, &bytes)
     }
 }

@@ -9,7 +9,7 @@ Not affiliated with or endorsed by Melipayamak.
 
 ```toml
 [dependencies]
-melipayamak = "0.1"
+melipayamak = "0.2"
 ```
 
 ```rust
@@ -43,15 +43,53 @@ async fn send_code(user: &str, api_key: &str) -> Result<RecId, melipayamak::Erro
 - Requests time out after 30 seconds by default; responses are capped at
   8 MiB.
 
-## TLS
+## Features and TLS
 
-One TLS backend is required; a build without either fails to compile.  The
-default `rustls` feature uses reqwest's rustls stack.  For the platform
-library instead (OpenSSL on FreeBSD):
+The client is the `client` feature, on by default through `rustls`, which
+uses reqwest's rustls stack.  For the platform library instead (OpenSSL on
+FreeBSD):
 
 ```toml
-melipayamak = { version = "0.1", default-features = false, features = ["native-tls"] }
+melipayamak = { version = "0.2", default-features = false, features = ["native-tls"] }
 ```
+
+The client needs a TLS backend; a build with `client` and neither fails to
+compile.
+
+## Your own HTTP client
+
+With no features at all the crate is the request and response types plus
+`melipayamak::wire`: every call's path, content type, request body and
+response decoding, under the same success rule.  Nothing then depends on
+reqwest or tokio, and requests go through whatever HTTP client you already
+have.
+
+```toml
+melipayamak = { version = "0.2", default-features = false }
+```
+
+```rust
+use melipayamak::{wire, sms::SendPattern};
+
+let creds = wire::Credentials::new(user, api_key)?;
+let req = SendPattern {
+    to: "09120000000".into(),
+    body_id: 123456,
+    args: vec!["4321".into()],
+};
+let op = wire::SEND_PATTERN;
+let path = op.path(); // POST base URL + path
+let content_type = op.content_type(); // form-encoded here; JSON for some
+let body = op.body(&creds, &req)?; // carries the API key
+// ... send it, read at most wire::MAX_RESPONSE_BYTES, then:
+let rec_id = op.decode(status, &response_body)?;
+```
+
+Melipayamak takes the credentials in the body, so every body carries the
+API key: keep bodies out of logs.  `Credentials` never prints the key.
+`wire::smart_deliveries` builds its operation from the IDs it asks about,
+which its decoding checks the answer against.  The client sends through
+the same code, so the two can't drift.
 
 ## Supported Rust versions
 

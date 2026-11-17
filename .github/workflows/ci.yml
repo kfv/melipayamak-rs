@@ -30,16 +30,29 @@ jobs:
       - run: >
           cargo clippy --locked --all-targets
           --no-default-features --features native-tls -- -D warnings
+      - name: Clippy, the wire layer alone
+        run: >
+          cargo clippy --locked --all-targets
+          --no-default-features -- -D warnings
       - run: cargo doc --locked --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
-      - name: Reject a build without TLS
+      - name: Reject the client without TLS
         run: |
-          if cargo check --locked --no-default-features 2>err.log; then
-            echo "built without a TLS backend" >&2
+          if cargo check --locked --no-default-features --features client \
+              2>err.log; then
+            echo "built the client without a TLS backend" >&2
             exit 1
           fi
           grep -q 'needs a TLS backend' err.log
+      - name: The wire layer alone pulls in no HTTP stack
+        run: |
+          cargo tree --locked --no-default-features -e normal --prefix none \
+            >tree.txt
+          if grep -E '^(reqwest|tokio|hyper|rustls|native-tls) ' tree.txt; then
+            echo "an HTTP stack is in the build without the client" >&2
+            exit 1
+          fi
       - run: cargo package --locked
 
   test:
@@ -59,6 +72,17 @@ jobs:
           cargo test --locked
           --no-default-features --features ${{ matrix.tls }}
 
+  test-wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: cargo test --locked --no-default-features
+
   msrv:
     runs-on: ubuntu-latest
     steps:
@@ -67,6 +91,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install 1.97 --profile minimal
       - run: cargo +1.97 check --locked --all-targets
+      - run: cargo +1.97 check --locked --no-default-features
 
   # Cargo.lock does not reach users, so also try the newest releases, as
   # the Cargo guide suggests.  Failures here are a warning, not a block.

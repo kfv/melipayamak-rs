@@ -6,7 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Client, DeliveryStatus, Error, RecId, value};
+#[cfg(feature = "client")]
+use crate::{Client, DeliveryStatus, Error, RecId, wire};
 
 /// Request for [`Client::send_sms`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,54 +156,7 @@ pub struct BasePriceRequest {
     pub text: String,
 }
 
-/// Joins `items` with `sep`, refusing any item that contains `sep`, since
-/// that would silently change the list Melipayamak sees.
-pub(crate) fn join(
-    items: &[String],
-    sep: char,
-    what: &'static str,
-) -> Result<String, Error> {
-    if items.iter().any(|s| s.contains(sep)) {
-        return Err(Error::InvalidArgument(what));
-    }
-    Ok(items.join(&sep.to_string()))
-}
-
-pub(crate) fn recipients(to: &[String]) -> Result<String, Error> {
-    if to.is_empty() {
-        return Err(Error::InvalidArgument("no recipients"));
-    }
-    join(to, ',', "recipient contains a comma")
-}
-
-fn pattern_args(args: &[String]) -> Result<String, Error> {
-    join(args, ';', "pattern argument contains a semicolon")
-}
-
-/// `name[0]=…&name[1]=…`, the form array encoding the documentation's
-/// samples use.
-pub(crate) fn indexed<'a>(
-    name: &str,
-    items: impl IntoIterator<Item = &'a str>,
-) -> Vec<(String, String)> {
-    items
-        .into_iter()
-        .enumerate()
-        .map(|(i, v)| (format!("{name}[{i}]"), v.to_owned()))
-        .collect()
-}
-
-fn pair(k: &str, v: impl ToString) -> (String, String) {
-    (k.to_owned(), v.to_string())
-}
-
-#[derive(Serialize)]
-struct SendMultipleBody<'a> {
-    to: Vec<&'a str>,
-    from: &'a str,
-    text: Vec<&'a str>,
-}
-
+#[cfg(feature = "client")]
 impl Client {
     /// Sends one text to one or more recipients.  Returns the `recId`s
     /// Melipayamak reports.
@@ -210,14 +164,7 @@ impl Client {
     /// `POST /api/SendSMS/SendSMS`
     /// (<https://www.melipayamak.com/api/sendsimplesms2/>).
     pub async fn send_sms(&self, req: &SendSms) -> Result<Vec<RecId>, Error> {
-        let fields = vec![
-            pair("to", recipients(&req.to)?),
-            pair("from", &req.from),
-            pair("text", &req.text),
-            pair("isflash", req.flash),
-        ];
-        let r = self.post_form("api/SendSMS/SendSMS", fields).await?;
-        value::rec_ids(&r)
+        self.call(&wire::SEND_SMS, req).await
     }
 
     /// Sends a one-time code in Melipayamak's fixed OTP text.
@@ -225,13 +172,7 @@ impl Client {
     /// `POST /api/SendSMS/SendOtp`
     /// (<https://www.melipayamak.com/api/sendotp/>).
     pub async fn send_otp(&self, req: &SendOtp) -> Result<RecId, Error> {
-        let fields = vec![
-            pair("to", &req.to),
-            pair("from", &req.from),
-            pair("code", req.code),
-        ];
-        let r = self.post_form("api/SendSMS/SendOtp", fields).await?;
-        value::rec_id(&r)
+        self.call(&wire::SEND_OTP, req).await
     }
 
     /// Sends a different text to each recipient.  Returns the `recId`s
@@ -244,19 +185,7 @@ impl Client {
         &self,
         req: &SendMultiple,
     ) -> Result<Vec<RecId>, Error> {
-        if req.messages.is_empty() {
-            return Err(Error::InvalidArgument("no recipients"));
-        }
-        let body = SendMultipleBody {
-            to: req.messages.iter().map(|m| m.to.as_str()).collect(),
-            from: &req.from,
-            text: req.messages.iter().map(|m| m.text.as_str()).collect(),
-        };
-        let r = self.post_json("api/SendSMS/SendMultipleSMS", &body).await?;
-        if r.value.as_deref().map(str::trim) == Some("1") {
-            return Ok(Vec::new());
-        }
-        value::rec_ids(&r)
+        self.call(&wire::SEND_MULTIPLE, req).await
     }
 
     /// Sends an approved pattern from the shared service line, which also
@@ -268,15 +197,7 @@ impl Client {
         &self,
         req: &SendPattern,
     ) -> Result<RecId, Error> {
-        let fields = vec![
-            pair("text", pattern_args(&req.args)?),
-            pair("to", &req.to),
-            pair("bodyId", req.body_id),
-        ];
-        let r = self
-            .post_form("api/SendSMS/BaseServiceNumber", fields)
-            .await?;
-        value::rec_id(&r)
+        self.call(&wire::SEND_PATTERN, req).await
     }
 
     /// Schedules an approved pattern send from the shared service line.
@@ -287,16 +208,7 @@ impl Client {
         &self,
         req: &SchedulePattern,
     ) -> Result<RecId, Error> {
-        let fields = vec![
-            pair("text", pattern_args(&req.args)?),
-            pair("to", &req.to),
-            pair("bodyId", req.body_id),
-            pair("scheduleDate", &req.schedule_date),
-        ];
-        let r = self
-            .post_form("api/SendSMS/BaseServiceNumberSchedule", fields)
-            .await?;
-        value::rec_id(&r)
+        self.call(&wire::SCHEDULE_PATTERN, req).await
     }
 
     /// Asks for one message's delivery status.
@@ -307,9 +219,7 @@ impl Client {
         &self,
         rec_id: RecId,
     ) -> Result<DeliveryStatus, Error> {
-        let fields = vec![pair("recId", rec_id)];
-        let r = self.post_form("api/SendSMS/GetDeliveries2", fields).await?;
-        value::delivery(&r)
+        self.call(&wire::DELIVERY, &rec_id).await
     }
 
     /// Lists received or sent messages.
@@ -320,14 +230,7 @@ impl Client {
         &self,
         req: &MessagesRequest,
     ) -> Result<Vec<Message>, Error> {
-        let fields = vec![
-            pair("location", req.location.code()),
-            pair("from", req.from.as_deref().unwrap_or_default()),
-            pair("index", req.index),
-            pair("count", req.count),
-        ];
-        let r = self.post_form("api/SendSMS/GetMessages", fields).await?;
-        value::records(&r)
+        self.call(&wire::MESSAGES, req).await
     }
 
     /// The account's remaining credit, as Melipayamak formats it.
@@ -335,8 +238,7 @@ impl Client {
     /// `POST /api/SendSMS/GetCredit`
     /// (<https://www.melipayamak.com/api/getcredit/>).
     pub async fn credit(&self) -> Result<String, Error> {
-        let r = self.post_form("api/SendSMS/GetCredit", Vec::new()).await?;
-        value::amount(&r)
+        self.call(&wire::CREDIT, &()).await
     }
 
     /// The price of a send, in rials, as Melipayamak formats it.
@@ -347,38 +249,6 @@ impl Client {
         &self,
         req: &BasePriceRequest,
     ) -> Result<String, Error> {
-        let fields = vec![
-            pair("irancellCount", req.irancell_count),
-            pair("mtnCount", req.mtn_count),
-            pair("from", &req.from),
-            pair("text", &req.text),
-        ];
-        let r = self.post_form("api/SendSMS/GetBasePrice", fields).await?;
-        value::amount(&r)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn joins_refuse_their_separator() {
-        let v =
-            |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(recipients(&v(&["0912", "0935"])).unwrap(), "0912,0935");
-        assert!(recipients(&[]).is_err());
-        assert!(recipients(&v(&["0912,0935"])).is_err());
-        assert_eq!(pattern_args(&v(&["a", "b c"])).unwrap(), "a;b c");
-        assert_eq!(pattern_args(&[]).unwrap(), "");
-        assert!(pattern_args(&v(&["a;b"])).is_err());
-    }
-
-    #[test]
-    fn indexed_names() {
-        assert_eq!(
-            indexed("Ids", ["7", "8"]),
-            vec![("Ids[0]".into(), "7".into()), ("Ids[1]".into(), "8".into())]
-        );
+        self.call(&wire::BASE_PRICE, req).await
     }
 }

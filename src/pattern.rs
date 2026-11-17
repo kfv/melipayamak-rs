@@ -6,7 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Client, Error, value};
+#[cfg(feature = "client")]
+use crate::{Client, Error, wire};
 
 int_enum! {
     /// Review status of a pattern.
@@ -83,12 +84,7 @@ pub struct EditPattern {
     pub body: String,
 }
 
-#[derive(Serialize)]
-struct BodyIdBody {
-    #[serde(rename = "bodyId")]
-    body_id: i32,
-}
-
+#[cfg(feature = "client")]
 impl Client {
     /// Lists the account's patterns, newest first.
     ///
@@ -98,9 +94,7 @@ impl Client {
         &self,
         req: &PatternsRequest,
     ) -> Result<Vec<Pattern>, Error> {
-        let r = self.post_json("api/ShareService/GetBodies", req).await?;
-        value::one(&r)?;
-        value::records(&r)
+        self.call(&wire::PATTERNS, req).await
     }
 
     /// Adds a pattern, which then waits for approval.  Returns its ID.
@@ -111,9 +105,7 @@ impl Client {
     /// `POST /api/ShareService/AddBody`, JSON body
     /// (<https://www.melipayamak.com/api/addbody/>).
     pub async fn add_pattern(&self, req: &AddPattern) -> Result<i32, Error> {
-        let r = self.post_json("api/ShareService/AddBody", req).await?;
-        let id = value::positive_id(&r)?;
-        i32::try_from(id).map_err(|_| r.unexpected())
+        self.call(&wire::ADD_PATTERN, req).await
     }
 
     /// Replaces a pattern's title and text; it then waits for approval
@@ -123,8 +115,7 @@ impl Client {
     /// `POST /api/ShareService/EditBody`, JSON body
     /// (<https://www.melipayamak.com/api/editbody/>).
     pub async fn edit_pattern(&self, req: &EditPattern) -> Result<(), Error> {
-        let r = self.post_json("api/ShareService/EditBody", req).await?;
-        value::one(&r)
+        self.call(&wire::EDIT_PATTERN, req).await
     }
 
     /// Deletes a pattern.  Deleting one already deleted succeeds.
@@ -132,8 +123,6 @@ impl Client {
     /// `POST /api/ShareService/DeleteBody`, JSON body
     /// (<https://www.melipayamak.com/api/deletebody/>).
     pub async fn delete_pattern(&self, body_id: i32) -> Result<(), Error> {
-        let body = BodyIdBody { body_id };
-        let r = self.post_json("api/ShareService/DeleteBody", &body).await?;
-        value::one(&r)
+        self.call(&wire::DELETE_PATTERN, &body_id).await
     }
 }

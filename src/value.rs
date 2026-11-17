@@ -11,7 +11,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::client::Reply;
+use crate::wire::Reply;
 use crate::{DeliveryStatus, Error, RecId};
 
 /// Every result code documented for the REST calls lies strictly inside
@@ -150,7 +150,7 @@ pub(crate) fn records<T: DeserializeOwned>(r: &Reply) -> Result<Vec<T>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::decode;
+    use crate::wire::decode;
 
     fn reply(value: &str) -> Reply {
         let body =

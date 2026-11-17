@@ -7,6 +7,7 @@
 //! affiliated with or endorsed by Melipayamak.
 //!
 //! ```no_run
+//! # #[cfg(feature = "client")]
 //! # async fn f() -> Result<(), melipayamak::Error> {
 //! use melipayamak::{Client, sms::SendPattern};
 //!
@@ -54,22 +55,31 @@
 //! - Amounts that Melipayamak sends as strings (credit, prices) are passed
 //!   through as strings, so nothing is lost to floating point.
 //!
-//! # TLS
+//! # Features and TLS
 //!
-//! The default `rustls` feature uses reqwest's rustls stack.  Disable default
-//! features and enable `native-tls` to use the platform library instead
-//! (OpenSSL on FreeBSD).  One of the two is required; a build without
-//! either fails to compile.
+//! [`Client`] is the `client` feature, on by default through `rustls`,
+//! which uses reqwest's rustls stack.  Disable default features and enable
+//! `native-tls` to use the platform library instead (OpenSSL on FreeBSD).
+//! The client needs one of the two; a build with `client` and neither
+//! fails to compile.
+//!
+//! With no features at all the crate is the types and [`wire`]: paths,
+//! request bodies and response decoding, for a caller that sends requests
+//! through an HTTP client of its own.  Nothing then depends on reqwest or
+//! tokio.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 // build() only accepts https outside loopback, so without TLS the client
 // could never reach Melipayamak.
-#[cfg(not(any(feature = "rustls", feature = "native-tls")))]
+#[cfg(all(
+    feature = "client",
+    not(any(feature = "rustls", feature = "native-tls"))
+))]
 compile_error!(
-    "melipayamak needs a TLS backend: enable the `rustls` (default) or \
-     `native-tls` feature"
+    "melipayamak's client needs a TLS backend: enable the `rustls` \
+     (default) or `native-tls` feature"
 );
 
 /// An integer-coded enum that keeps values it does not know.
@@ -128,6 +138,7 @@ macro_rules! int_enum {
     };
 }
 
+#[cfg(feature = "client")]
 mod client;
 mod error;
 mod value;
@@ -135,13 +146,16 @@ mod value;
 pub mod pattern;
 pub mod smart;
 pub mod sms;
+pub mod wire;
 
+#[cfg(feature = "client")]
 pub use client::{
-    Client, ClientBuilder, DEFAULT_BASE_URL, DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_TIMEOUT, MAX_RESPONSE_BYTES,
+    Client, ClientBuilder, DEFAULT_CONNECT_TIMEOUT, DEFAULT_TIMEOUT,
 };
 pub use error::{ApiError, Error, RetStatus};
+#[cfg(feature = "client")]
 pub use reqwest;
+pub use wire::{DEFAULT_BASE_URL, MAX_RESPONSE_BYTES};
 
 use serde::{Deserialize, Serialize};
 
